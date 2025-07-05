@@ -2,66 +2,47 @@
 """
     intersects(a::Line, b::Line) -> Bool, Point
 
-Intersection of 2 line segmens `a` and `b`.
-Returns intersection_found::Bool, intersection_point::Point
+Intersection of 2 line segments `a` and `b`.
+Returns `(intersection_found::Bool, intersection_point::Point)`
 """
-function intersects(a::Line{2,T1}, b::Line{2,T2}) where {T1,T2}
+# 2D Line-segment intersection algorithm by Paul Bourke and many others.
+# http://paulbourke.net/geometry/pointlineplane/
+function intersects(a::Line{2,T1}, b::Line{2,T2}; eps = 0) where {T1,T2}
     T = promote_type(T1, T2)
-    v1, v2 = a
-    v3, v4 = b
-    MT = Mat{2,2,T,4}
     p0 = zero(Point2{T})
 
-    verticalA = v1[1] == v2[1]
-    verticalB = v3[1] == v4[1]
+    x1, y1 = a[1]
+    x2, y2 = a[2]
+    x3, y3 = b[1]
+    x4, y4 = b[2]
 
-    # if a segment is vertical the linear algebra might have trouble
-    # so we will rotate the segments such that neither is vertical
-    dorotation = verticalA || verticalB
+    denominator = ((y4 - y3) * (x2 - x1)) - ((x4 - x3) * (y2 - y1))
+    numerator_a = ((x4 - x3) * (y1 - y3)) - ((y4 - y3) * (x1 - x3))
+    numerator_b = ((x2 - x1) * (y1 - y3)) - ((y2 - y1) * (x1 - x3))
 
-    if dorotation
-        θ = T(0.0)
-        if verticalA && verticalB
-            θ = T(π / 4)
-        elseif verticalA || verticalB # obviously true, but make it clear
-            θ34 = -atan(v4[2] - v3[2], v4[1] - v3[1])
-            θ12 = -atan(v2[2] - v1[2], v2[1] - v1[1])
-            θ = verticalA ? θ34 : θ12
-            θ = abs(θ) == T(0) ? (θ12 + θ34) / 2 : θ
-            θ = abs(θ) == T(pi) ? (θ12 + θ34) / 2 : θ
-        end
-        rotation = MT(cos(θ), sin(θ), -sin(θ), cos(θ))
-        v1 = rotation * v1
-        v2 = rotation * v2
-        v3 = rotation * v3
-        v4 = rotation * v4
+    if denominator == 0
+        # no intersection: lines are parallel
+        return false, p0
     end
 
-    a = det(MT(v1[1] - v2[1], v1[2] - v2[2], v3[1] - v4[1], v3[2] - v4[2]))
+    # If we ever need to know if the lines are coincident, we can get that too:
+    # denominator == numerator_a == numerator_b == 0 && return :coincident_lines
 
-    (abs(a) < eps(T)) && return false, p0 # Lines are parallel
+    # unknown_a and b tell us how far along the line segment the intersection is.
+    unknown_a = numerator_a / denominator
+    unknown_b = numerator_b / denominator
 
-    d1 = det(MT(v1[1], v1[2], v2[1], v2[2]))
-    d2 = det(MT(v3[1], v3[2], v4[1], v4[2]))
-    x = det(MT(d1, v1[1] - v2[1], d2, v3[1] - v4[1])) / a
-    y = det(MT(d1, v1[2] - v2[2], d2, v3[2] - v4[2])) / a
-
-    (x < prevfloat(min(v1[1], v2[1])) || x > nextfloat(max(v1[1], v2[1]))) &&
-        return false, p0
-    (y < prevfloat(min(v1[2], v2[2])) || y > nextfloat(max(v1[2], v2[2]))) &&
-        return false, p0
-    (x < prevfloat(min(v3[1], v4[1])) || x > nextfloat(max(v3[1], v4[1]))) &&
-        return false, p0
-    (y < prevfloat(min(v3[2], v4[2])) || y > nextfloat(max(v3[2], v4[2]))) &&
-        return false, p0
-
-    point = Point2{T}(x, y)
-    # don't forget to rotate the answer back
-    if dorotation
-        point = transpose(rotation) * point
+    # Values between [0, 1] mean the intersection point of the lines rests on
+    # both of the line segments.
+    if eps <= unknown_a <= 1-eps && eps <= unknown_b <= 1-eps
+        # Substituting an unknown back lets us find the intersection point.
+        x = x1 + (unknown_a * (x2 - x1))
+        y = y1 + (unknown_a * (y2 - y1))
+        return true, Point2{T}(x, y)
     end
 
-    return true, point
+    # lines intersect, but outside of at least one of these line segments.
+    return false, p0
 end
 
 function simple_concat(vec::AbstractVector, range, endpoint::P) where {P}
@@ -79,29 +60,41 @@ function consecutive_pairs(arr)
 end
 
 """
-    self_intersections(points::AbstractVector{AbstractPoint})
+    self_intersections(points::AbstractVector{<:Point})
 
-Finds all self intersections of polygon `points`
+Finds all self intersections of in a continuous line described by `points`.
+Returns a Vector of indices where each pair `v[2i], v[2i+1]` refers two
+intersecting line segments by their first point, and a Vector of intersection
+points.
+
+Note that if two points are the same, they will generate a self intersection
+unless they are consecutive segments. (The first and last point are assumed to
+be shared between the first and last segment.)
 """
-function self_intersections(points::AbstractVector{<:AbstractPoint})
+function self_intersections(points::AbstractVector{<:VecTypes{D, T}}) where {D, T}
+    ti, sections = _self_intersections(points)
+    # convert array of tuples to flat array
+    return [x for t in ti for x in t], sections
+end
+
+function _self_intersections(points::AbstractVector{<:VecTypes{D, T}}) where {D, T}
     sections = similar(points, 0)
-    intersections = Int[]
+    intersections = Tuple{Int, Int}[]
 
-    wraparound(i) = mod1(i, length(points) - 1)
+    N = length(points)
 
-    for (i, (a, b)) in enumerate(consecutive_pairs(points))
-        for (j, (a2, b2)) in enumerate(consecutive_pairs(points))
-            is1, is2 = wraparound(i + 1), wraparound(i - 1)
-            if i != j &&
-               is1 != j &&
-               is2 != j &&
-               !(i in intersections) &&
-               !(j in intersections)
-                intersected, p = intersects(Line(a, b), Line(a2, b2))
-                if intersected
-                    push!(intersections, i, j)
-                    push!(sections, p)
-                end
+    for i in 1:N-3
+        a = points[i]; b = points[i+1]
+        # i+1 == j describes consecutive segments which are always "intersecting"
+        # at point i+1/j. Skip those (start at i+2)
+        # Special case: We assume points[1] == points[end] so 1 -> 2 and N-1 -> N
+        # always "intersect" at 1/N. Skip this too (end at N-2 in this case)
+        for j in i+2 : N-1 - (i == 1)
+            a2 = points[j]; b2 = points[j+1]
+            intersected, p = intersects(Line(a, b), Line(a2, b2))
+            if intersected
+                push!(intersections, (i, j))
+                push!(sections, p)
             end
         end
     end
@@ -109,20 +102,19 @@ function self_intersections(points::AbstractVector{<:AbstractPoint})
 end
 
 """
-    split_intersections(points::AbstractVector{AbstractPoint})
+    split_intersections(points::AbstractVector{<: Point})
 
 Splits polygon `points` into it's self intersecting parts. Only 1 intersection
 is handled right now.
 """
-function split_intersections(points::AbstractVector{<:AbstractPoint})
-    intersections, sections = self_intersections(points)
+function split_intersections(points::AbstractVector{<:VecTypes{N, T}}) where {N, T}
+    intersections, sections = _self_intersections(points)
     return if isempty(intersections)
         return [points]
-    elseif length(intersections) == 2 && length(sections) == 1
-        a, b = intersections
+    elseif length(intersections) == 1 && length(sections) == 1
+        a, b = intersections[1]
         p = sections[1]
-        a, b = min(a, b), max(a, b)
-        poly1 = simple_concat(points, (a + 1):(b - 1), p)
+        poly1 = simple_concat(points, (a + 1):b, p)
         poly2 = simple_concat(points, (b + 1):(length(points) + a), p)
         return [poly1, poly2]
     else

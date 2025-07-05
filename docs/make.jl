@@ -10,12 +10,12 @@ makedocs(format=Documenter.HTML(prettyurls=get(ENV, "CI", "false") == "true"),
          pages=[
                 "index.md",
                 "primitives.md",
-                "rectangles.md",
                 "polygons.md",
                 "meshes.md",
                 "decomposition.md",
-                "metadata.md",
-                "api.md"
+                "boundingboxes.md",
+                "static_array_types.md",
+                "api.md",
                ],
          modules=[GeometryBasics])
 

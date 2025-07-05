@@ -32,41 +32,48 @@ origin(c::HyperSphere) = c.center
 Base.minimum(c::HyperSphere{N,T}) where {N,T} = Vec{N,T}(origin(c)) - Vec{N,T}(radius(c))
 Base.maximum(c::HyperSphere{N,T}) where {N,T} = Vec{N,T}(origin(c)) + Vec{N,T}(radius(c))
 
-function Base.in(x::AbstractPoint, c::HyperSphere)
+function Base.in(x::Point, c::HyperSphere)
     return norm(origin(c) - x) ≤ radius(c)
 end
 
-centered(S::Type{HyperSphere{N,T}}) where {N,T} = S(Vec{N,T}(0), T(0.5))
-function centered(::Type{T}) where {T<:HyperSphere}
-    return centered(HyperSphere{ndims_or(T, 3),eltype_or(T, Float32)})
-end
+centered(S::Type{HyperSphere{N,T}}) where {N,T} = S(Point{N,T}(0), T(0.5))
+centered(S::Type{<: HyperSphere{N}}) where {N} = S(Point{N,Float32}(0), 0.5f0)
+centered(S::Type{<: HyperSphere}) = S(Point3f(0), 0.5f0)
 
 function coordinates(s::Circle, nvertices=64)
-    rad = radius(s)
-    inner(fi) = Point(rad * sin(fi + pi), rad * cos(fi + pi)) .+ origin(s)
-    return (inner(fi) for fi in LinRange(0, 2pi, nvertices))
+    r = radius(s); o = origin(s)
+    ps = [r * Point(cos(phi), sin(phi)) + o for phi in LinRange(0, 2pi, nvertices)]
+    # ps[end] = o
+    return ps
 end
 
-function texturecoordinates(s::Circle, nvertices=64)
+function texturecoordinates(::Circle, nvertices=64)
     return coordinates(Circle(Point2f(0.5), 0.5f0), nvertices)
 end
+
+# TODO: Consider generating meshes for circles with a point in the center so
+#       that the triangles are more regular
+# function faces(::Circle, nvertices=64)
+#     return [GLTriangleFace(nvertices+1, i, mod1(i+1, nvertices)) for i in 1:nvertices]
+# end
+
 
 function coordinates(s::Sphere, nvertices=24)
     θ = LinRange(0, pi, nvertices)
     φ = LinRange(0, 2pi, nvertices)
     inner(θ, φ) = Point(cos(φ) * sin(θ), sin(φ) * sin(θ), cos(θ)) .* s.r .+ s.center
-    return ivec((inner(θ, φ) for θ in θ, φ in φ))
+    return [inner(θ, φ) for φ in φ for θ in θ]
 end
 
-function texturecoordinates(s::Sphere, nvertices=24)
+function texturecoordinates(::Sphere, nvertices=24)
     ux = LinRange(0, 1, nvertices)
     return ivec(((φ, θ) for θ in reverse(ux), φ in ux))
 end
 
-function faces(sphere::Sphere, nvertices=24)
+function faces(::Sphere, nvertices=24)
     return faces(Rect(0, 0, 1, 1), (nvertices, nvertices))
 end
 
-function normals(s::Sphere{T}, nvertices=24) where {T}
+function normals(::Sphere{T}, nvertices=24) where {T}
     return coordinates(Sphere(Point{3,T}(0), 1), nvertices)
 end

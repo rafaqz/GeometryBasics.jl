@@ -13,79 +13,66 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 =#
 """
-    area(vertices::AbstractVector{AbstractPoint{3}}, face::TriangleFace)
+    area(vertices::AbstractVector{Point{3}}, face::NgonFace)
 
-Calculate the area of one triangle.
+Calculate the area of one face.
 """
-function area(vertices::AbstractVector{<:AbstractPoint{3,VT}},
-              face::TriangleFace{FT}) where {VT,FT}
-    v1, v2, v3 = vertices[face]
-    return 0.5 * norm(orthogonal_vector(v1, v2, v3))
+function area(vertices::AbstractVector{<:Point}, face::NgonFace)
+    return 0.5 * norm(orthogonal_vector(vertices[face]))
 end
 
 """
-    area(vertices::AbstractVector{AbstractPoint{3}}, faces::AbstractVector{TriangleFace})
+    area(vertices::AbstractVector{Point}, faces::AbstractVector{NgonFace})
 
-Calculate the area of all triangles.
+Calculate the area of all faces.
 """
-function area(vertices::AbstractVector{<:AbstractPoint{3,VT}},
-              faces::AbstractVector{TriangleFace{FT}}) where {VT,FT}
+function area(vertices::AbstractVector{<:Point}, faces::AbstractVector{<:NgonFace})
     return sum(x -> area(vertices, x), faces)
 end
 
 """
-    area(contour::AbstractVector{AbstractPoint}})
+    area(vertices::AbstractVector{Point}})
 
 Calculate the area of a polygon.
 
 For 2D points, the oriented area is returned (negative when the points are
 oriented clockwise).
 """
-function area(contour::AbstractVector{<:AbstractPoint{2,T}}) where {T}
-    length(contour) < 3 && return zero(T)
-    A = zero(T)
-    p = lastindex(contour)
-    for q in eachindex(contour)
-        A += cross(contour[p], contour[q])
-        p = q
-    end
-    return A * T(0.5)
+function area(vertices::AbstractVector{Point{2,T}}) where {T}
+    length(vertices) < 3 && return zero(T)
+    return T(0.5) * orthogonal_vector(vertices)[3]
 end
 
-function area(contour::AbstractVector{<:AbstractPoint{3,T}}) where {T}
-    A = zero(eltype(contour))
-    o = first(contour)
-    for i in (firstindex(contour) + 1):(lastindex(contour) - 1)
-        A += cross(contour[i] - o, contour[i + 1] - o)
-    end
-    return norm(A) * T(0.5)
+function area(vertices::AbstractVector{Point{3,T}}) where {T}
+    length(vertices) < 3 && return zero(T)
+    return T(0.5) * norm(orthogonal_vector(vertices))
 end
+
 
 """
     in(point, triangle)
 
 Determine if a point is inside of a triangle.
 """
-function Base.in(P::T, triangle::Triangle) where {T<:AbstractPoint}
+function Base.in(P::T, triangle::Triangle) where {T<:Point}
     A, B, C = coordinates(triangle)
-    a = C .- B
-    b = A .- C
-    c = B .- A
 
-    ap = P .- A
-    bp = P .- B
-    cp = P .- C
+    ap = A .- P
+    bp = B .- P
+    cp = C .- P
 
-    a_bp = a[1] * bp[2] - a[2] * bp[1]
-    c_ap = c[1] * ap[2] - c[2] * ap[1]
-    b_cp = b[1] * cp[2] - b[2] * cp[1]
+    u = cross(bp, cp)
+    v = cross(cp, ap)
+    w = cross(ap, bp)
 
     t0 = zero(eltype(T))
-
-    return ((a_bp >= t0) && (b_cp >= t0) && (c_ap >= t0))
+    dot(u, v) < t0 && return false
+    dot(u, w) < t0 && return false
+    return true
 end
 
-function snip(contour::AbstractVector{<:AbstractPoint}, u, v, w, n, V)
+
+function snip(contour::AbstractVector{<:Point}, u, v, w, n, V)
     A = contour[V[u]]
     B = contour[V[v]]
     C = contour[V[w]]
@@ -105,16 +92,15 @@ function snip(contour::AbstractVector{<:AbstractPoint}, u, v, w, n, V)
 end
 
 """
-    decompose(facetype, contour::AbstractArray{<:AbstractPoint})
+    decompose(facetype, contour::AbstractArray{<:Point})
 
 Triangulate a Polygon without hole.
 
 Returns a Vector{`facetype`} defining indexes into `contour`.
 """
-function decompose(::Type{FaceType},
-                   points::AbstractArray{P}) where {P<:AbstractPoint,FaceType<:AbstractFace}
+function decompose(::Type{F}, points::AbstractVector{<:Point}) where {F<:AbstractFace}
     #= allocate and initialize list of Vertices in polygon =#
-    result = FaceType[]
+    result = F[]
 
     # the algorithm doesn't like closed contours
     contour = if isapprox(last(points), first(points))
@@ -160,7 +146,7 @@ function decompose(::Type{FaceType},
             b = V[v]
             c = V[w]
             #= output Triangle =#
-            push!(result, convert_simplex(FaceType, TriangleFace(a, b, c))...)
+            push!(result, convert_simplex(F, TriangleFace(a, b, c))...)
             #= remove v from remaining polygon =#
             s = v
             t = v + 1
@@ -170,7 +156,7 @@ function decompose(::Type{FaceType},
                 t += 1
             end
             nv -= 1
-            #= resest error detection counter =#
+            #= reset error detection counter =#
             count = 2 * nv
         end
     end
